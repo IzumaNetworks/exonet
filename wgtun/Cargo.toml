@@ -1,0 +1,46 @@
+[package]
+name = "wgtun"
+version = "0.1.0"
+edition = "2021"
+description = "Self-contained WireGuard tunnel CLI"
+license = "MIT"
+
+[dependencies]
+# WireGuard Protocol
+boringtun = "0.6"
+x25519-dalek = { version = "=2.0.0-rc.3", features = ["static_secrets"] }
+
+# TUN Device
+tokio-tun = "0.11"
+
+# Network Configuration (Linux netlink)
+rtnetlink = "0.14"
+netlink-packet-route = "0.19"
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+futures = "0.3"
+
+# Configuration
+rust-ini = "0.21"
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+base64 = "0.22"
+ip_network = "0.4"
+ip_network_table = "0.2"
+socket2 = "0.5"
+rand = "0.8"
+
+# Error Handling & Logging
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Platform-specific
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+nix = { version = "0.29", features = ["net", "ioctl"] }
