@@ -76,7 +76,7 @@ pub async fn cmd_up(
         for allowed_ip in &peer.allowed_ips {
             // Skip routes for the interface's own addresses
             let skip = config.interface.addresses.iter().any(|a| {
-                a.network_address() == allowed_ip.network_address()
+                a.network().network_address() == allowed_ip.network_address()
             });
 
             if !skip {

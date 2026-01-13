@@ -1,6 +1,40 @@
 use ip_network::IpNetwork;
+use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use x25519_dalek::{PublicKey, StaticSecret};
+
+/// An IP address with a prefix length, for interface address assignment.
+/// Unlike IpNetwork, this allows host addresses like 10.0.0.2/24.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceAddress {
+    /// The IP address to assign
+    pub ip: IpAddr,
+    /// The prefix length (subnet mask)
+    pub prefix: u8,
+}
+
+impl InterfaceAddress {
+    pub fn new(ip: IpAddr, prefix: u8) -> Self {
+        Self { ip, prefix }
+    }
+
+    /// Get the network address (for route calculations)
+    pub fn network(&self) -> IpNetwork {
+        IpNetwork::new_truncate(self.ip, self.prefix).expect("valid prefix")
+    }
+}
+
+impl fmt::Debug for InterfaceAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.ip, self.prefix)
+    }
+}
+
+impl fmt::Display for InterfaceAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.ip, self.prefix)
+    }
+}
 
 /// Complete WireGuard configuration
 #[derive(Clone)]
@@ -24,7 +58,7 @@ pub struct InterfaceConfig {
     /// Private key for this interface
     pub private_key: StaticSecret,
     /// IP addresses to assign to the interface (e.g., 10.0.0.1/24)
-    pub addresses: Vec<IpNetwork>,
+    pub addresses: Vec<InterfaceAddress>,
     /// UDP listen port (None = random port selection)
     pub listen_port: Option<u16>,
     /// DNS servers (informational - not applied by this tool)

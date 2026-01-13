@@ -2,16 +2,17 @@ use async_trait::async_trait;
 use ip_network::IpNetwork;
 use std::net::IpAddr;
 
+use crate::config::InterfaceAddress;
 use crate::error::Result;
 
 /// Platform-agnostic network configuration operations
 #[async_trait]
 pub trait NetworkManager: Send + Sync {
     /// Add an IP address to the interface
-    async fn add_address(&self, iface_index: u32, addr: IpNetwork) -> Result<()>;
+    async fn add_address(&self, iface_index: u32, addr: InterfaceAddress) -> Result<()>;
 
     /// Remove an IP address from the interface
-    async fn del_address(&self, iface_index: u32, addr: IpNetwork) -> Result<()>;
+    async fn del_address(&self, iface_index: u32, addr: InterfaceAddress) -> Result<()>;
 
     /// Add a route through the interface
     async fn add_route(

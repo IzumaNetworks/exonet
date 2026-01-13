@@ -4,6 +4,7 @@ use ip_network::IpNetwork;
 use rtnetlink::Handle;
 use std::net::IpAddr;
 
+use crate::config::InterfaceAddress;
 use crate::error::{NetworkError, Result};
 use crate::platform::traits::NetworkManager;
 
@@ -27,57 +28,24 @@ impl LinuxNetworkManager {
 
 #[async_trait]
 impl NetworkManager for LinuxNetworkManager {
-    async fn add_address(&self, iface_index: u32, addr: IpNetwork) -> Result<()> {
-        let prefix_len = addr.netmask();
-
-        match addr.network_address() {
-            IpAddr::V4(ipv4) => {
-                self.handle
-                    .address()
-                    .add(iface_index, IpAddr::V4(ipv4), prefix_len)
-                    .execute()
-                    .await
-                    .map_err(|e| NetworkError::AddAddress(e.to_string()))?;
-            }
-            IpAddr::V6(ipv6) => {
-                self.handle
-                    .address()
-                    .add(iface_index, IpAddr::V6(ipv6), prefix_len)
-                    .execute()
-                    .await
-                    .map_err(|e| NetworkError::AddAddress(e.to_string()))?;
-            }
-        }
+    async fn add_address(&self, iface_index: u32, addr: InterfaceAddress) -> Result<()> {
+        self.handle
+            .address()
+            .add(iface_index, addr.ip, addr.prefix)
+            .execute()
+            .await
+            .map_err(|e| NetworkError::AddAddress(e.to_string()))?;
 
         Ok(())
     }
 
-    async fn del_address(&self, iface_index: u32, addr: IpNetwork) -> Result<()> {
-        // For simplicity, we just try to delete - if it fails, the address wasn't there
-        // A more complete implementation would query first
-        let prefix_len = addr.netmask();
-
-        match addr.network_address() {
-            IpAddr::V4(ipv4) => {
-                // Create a delete request - this is a simplified approach
-                // We'd need to find the address message first, but that's complex
-                // For now, just log that we tried
-                tracing::debug!(
-                    "Attempting to delete address {}/{} from interface {}",
-                    ipv4,
-                    prefix_len,
-                    iface_index
-                );
-            }
-            IpAddr::V6(ipv6) => {
-                tracing::debug!(
-                    "Attempting to delete address {}/{} from interface {}",
-                    ipv6,
-                    prefix_len,
-                    iface_index
-                );
-            }
-        }
+    async fn del_address(&self, iface_index: u32, addr: InterfaceAddress) -> Result<()> {
+        // For simplicity, we just log - a complete implementation would query and delete
+        tracing::debug!(
+            "Attempting to delete address {} from interface {}",
+            addr,
+            iface_index
+        );
 
         Ok(())
     }

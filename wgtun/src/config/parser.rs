@@ -6,7 +6,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use super::types::{InterfaceConfig, PeerConfig, WgConfig};
+use super::types::{InterfaceAddress, InterfaceConfig, PeerConfig, WgConfig};
 
 /// Parse a WireGuard configuration file
 pub fn parse_config_file<P: AsRef<Path>>(path: P) -> Result<WgConfig> {
@@ -42,7 +42,7 @@ fn parse_interface_section(props: &ini::Properties) -> Result<InterfaceConfig> {
 
     let addresses = props
         .get("Address")
-        .map(|s| parse_address_list(s))
+        .map(|s| parse_interface_addresses(s))
         .transpose()?
         .unwrap_or_default();
 
@@ -184,23 +184,50 @@ fn decode_preshared_key(s: &str) -> Result<[u8; 32]> {
     Ok(key_bytes)
 }
 
-/// Parse a comma-separated list of IP addresses/networks
-fn parse_address_list(s: &str) -> Result<Vec<IpNetwork>> {
+/// Parse interface addresses (e.g., "10.0.0.2/24") - allows host addresses
+fn parse_interface_addresses(s: &str) -> Result<Vec<InterfaceAddress>> {
     s.split(',')
         .map(|addr| {
             let addr = addr.trim();
-            // Handle addresses without CIDR notation
             if !addr.contains('/') {
-                // Assume /32 for IPv4 and /128 for IPv6
                 let ip: IpAddr = addr
                     .parse()
                     .map_err(|_| ConfigError::InvalidAddress(addr.to_string()))?;
                 let prefix = if ip.is_ipv4() { 32 } else { 128 };
-                return IpNetwork::new(ip, prefix)
-                    .map_err(|_| ConfigError::InvalidAddress(addr.to_string()).into());
+                return Ok(InterfaceAddress::new(ip, prefix));
             }
-            addr.parse::<IpNetwork>()
-                .map_err(|_| ConfigError::InvalidAddress(addr.to_string()).into())
+            let parts: Vec<&str> = addr.splitn(2, '/').collect();
+            let ip: IpAddr = parts[0]
+                .parse()
+                .map_err(|_| ConfigError::InvalidAddress(addr.to_string()))?;
+            let prefix: u8 = parts[1]
+                .parse()
+                .map_err(|_| ConfigError::InvalidAddress(addr.to_string()))?;
+            Ok(InterfaceAddress::new(ip, prefix))
+        })
+        .collect()
+}
+
+/// Parse a comma-separated list of networks for AllowedIPs
+fn parse_address_list(s: &str) -> Result<Vec<IpNetwork>> {
+    s.split(',')
+        .map(|addr| {
+            let addr = addr.trim();
+            if !addr.contains('/') {
+                let ip: IpAddr = addr
+                    .parse()
+                    .map_err(|_| ConfigError::InvalidAddress(addr.to_string()))?;
+                let prefix = if ip.is_ipv4() { 32 } else { 128 };
+                return Ok(IpNetwork::new_truncate(ip, prefix).expect("valid prefix"));
+            }
+            let parts: Vec<&str> = addr.splitn(2, '/').collect();
+            let ip: IpAddr = parts[0]
+                .parse()
+                .map_err(|_| ConfigError::InvalidAddress(addr.to_string()))?;
+            let prefix: u8 = parts[1]
+                .parse()
+                .map_err(|_| ConfigError::InvalidAddress(addr.to_string()))?;
+            Ok(IpNetwork::new_truncate(ip, prefix).expect("valid prefix"))
         })
         .collect()
 }
