@@ -19,12 +19,29 @@ const MAX_PACKET_SIZE: usize = 65536;
 /// Timer interval for keepalives/handshakes
 const TIMER_INTERVAL_MS: u64 = 250;
 
+/// Extract sender index from outgoing handshake packets
+/// WireGuard packet format:
+/// - Type 1 (handshake_initiation): sender_index at bytes 4-7
+/// - Type 2 (handshake_response): sender_index at bytes 4-7
+fn extract_sender_index(packet: &[u8]) -> Option<u32> {
+    if packet.len() >= 8 {
+        let packet_type = packet[0];
+        if packet_type == 1 || packet_type == 2 {
+            return Some(u32::from_le_bytes([packet[4], packet[5], packet[6], packet[7]]));
+        }
+    }
+    None
+}
+
 /// Session manager containing all peer sessions
 pub struct SessionManager {
-    /// Peer sessions indexed by their index
+    /// Peer sessions indexed by their local peer index
     sessions: HashMap<u32, RwLock<PeerSession>>,
     /// Map from public key to session index
     key_to_index: HashMap<PublicKey, u32>,
+    /// Map from WireGuard sender indices to local peer indices
+    /// This is needed because boringtun assigns sender indices that differ from local peer indices
+    sender_index_to_peer: RwLock<HashMap<u32, u32>>,
     /// AllowedIPs router
     router: AllowedIpsRouter,
 }
@@ -52,6 +69,7 @@ impl SessionManager {
         Ok(Self {
             sessions,
             key_to_index,
+            sender_index_to_peer: RwLock::new(HashMap::new()),
             router,
         })
     }
@@ -78,6 +96,24 @@ impl SessionManager {
     /// Iterate over all sessions
     pub fn iter(&self) -> impl Iterator<Item = (&u32, &RwLock<PeerSession>)> {
         self.sessions.iter()
+    }
+
+    /// Register a WireGuard sender index mapping to a local peer index
+    /// Called when sending handshake packets (initiation or response)
+    pub async fn register_sender_index(&self, sender_index: u32, peer_index: u32) {
+        let mut map = self.sender_index_to_peer.write().await;
+        tracing::debug!(
+            "Registered sender_index {} for peer {}",
+            sender_index,
+            peer_index
+        );
+        map.insert(sender_index, peer_index);
+    }
+
+    /// Look up a local peer index from a WireGuard sender index (receiver_index in incoming packets)
+    pub async fn lookup_sender_index(&self, sender_index: u32) -> Option<u32> {
+        let map = self.sender_index_to_peer.read().await;
+        map.get(&sender_index).copied()
     }
 }
 
@@ -187,6 +223,10 @@ async fn initiate_handshakes(
                         idx,
                         endpoint
                     );
+                    // Register the sender index so we can receive responses
+                    if let Some(sender_idx) = extract_sender_index(data) {
+                        sessions.register_sender_index(sender_idx, *idx).await;
+                    }
                     if let Err(e) = udp.send_to(data, endpoint).await {
                         tracing::warn!("Failed to send handshake to {}: {}", endpoint, e);
                     }
@@ -281,22 +321,25 @@ async fn handle_udp_packet(
 
     // Try to find the peer either by index or by trying all peers
     if let Some(idx) = receiver_index {
-        // Data packet - use receiver index
-        if let Some(session_lock) = sessions.get(idx) {
-            let mut session = session_lock.write().await;
+        // Data packet - look up local peer index from sender_index mapping
+        let peer_idx = sessions.lookup_sender_index(idx).await;
+        if let Some(peer_idx) = peer_idx {
+            if let Some(session_lock) = sessions.get(peer_idx) {
+                let mut session = session_lock.write().await;
 
-            // Update endpoint if it changed
-            session.set_endpoint(src_addr).await;
+                // Update endpoint if it changed
+                session.set_endpoint(src_addr).await;
 
-            process_peer_packet(
-                packet,
-                src_addr,
-                &mut session,
-                tun_writer,
-                udp,
-                out_buf,
-            )
-            .await?;
+                process_peer_packet(
+                    packet,
+                    src_addr,
+                    &mut session,
+                    tun_writer,
+                    udp,
+                    out_buf,
+                )
+                .await?;
+            }
         } else {
             tracing::debug!("Unknown receiver index {} from {}", idx, src_addr);
         }
@@ -309,6 +352,10 @@ async fn handle_udp_packet(
                 TunnResult::WriteToNetwork(response) => {
                     // Update endpoint
                     session.set_endpoint(src_addr).await;
+                    // Register the sender index so we can receive data packets
+                    if let Some(sender_idx) = extract_sender_index(response) {
+                        sessions.register_sender_index(sender_idx, *idx).await;
+                    }
                     udp.send_to(response, src_addr).await?;
                     tracing::debug!("Handshake response sent to peer {} at {}", idx, src_addr);
                     return Ok(());
@@ -418,6 +465,10 @@ async fn handle_timers(
         loop {
             match session.update_timers(out_buf) {
                 TunnResult::WriteToNetwork(data) => {
+                    // Register sender index if this is a handshake packet
+                    if let Some(sender_idx) = extract_sender_index(data) {
+                        sessions.register_sender_index(sender_idx, *idx).await;
+                    }
                     if let Some(endpoint) = endpoint {
                         if let Err(e) = udp.send_to(data, endpoint).await {
                             tracing::debug!(
